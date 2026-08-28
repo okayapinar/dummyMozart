@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
+from ml_collections import ConfigDict
 
 import config
 from midi_io import load_token_sequence
@@ -20,10 +21,17 @@ def _iter_midi_files(midi_dir: Path, country_filter: str | None = None) -> list[
 
 
 def build_expert_transitions(
-    midi_dir: Path | str = config.MIDI_DIR, seq_len: int = config.SEQ_LEN, country_filter: str | None = config.COUNTRY_FILTER
+    midi_dir: Path | str | None = None,
+    seq_len: int | None = None,
+    country_filter: str | None = None,
+    cfg: ConfigDict | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build (state, action, next_state) tuples from all MIDI files."""
-    midi_dir = Path(midi_dir)
+    cfg = cfg or config.get_active_config()
+    midi_dir = Path(midi_dir) if midi_dir is not None else Path(cfg.paths.midi_dir)
+    seq_len = seq_len if seq_len is not None else cfg.data.seq_len
+    country_filter = country_filter if country_filter is not None else cfg.data.country_filter
+
     midi_files = _iter_midi_files(midi_dir, country_filter)
     if not midi_files:
         raise RuntimeError(f"No MIDI files found under {midi_dir}")
@@ -35,7 +43,7 @@ def build_expert_transitions(
 
     for midi_path in midi_files:
         try:
-            token_ids = load_token_sequence(midi_path)
+            token_ids = load_token_sequence(midi_path, cfg=cfg)
         except Exception as exc:
             logger.warning("Skipping %s: %s", midi_path, exc)
             skipped += 1

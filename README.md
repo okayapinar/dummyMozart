@@ -56,22 +56,24 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Put expert MIDI files in `midis/` (subfolders are scanned). Files must be long enough to produce at least `SEQ_LEN + 1` tokens.
+Put expert MIDI files in `midis/` (subfolders are scanned). Files must be long enough to produce at least `seq_len + 1` tokens (64 + 1 by default).
 
 ## Training
 
 ```bash
 python train.py
-python train.py --iters 50
+python train.py --config prod
+python train.py --config debug
+python train.py --config trial --iters 50
 python train.py --logdir runs/experiment1
 ```
 
-The default iteration count is `config.N_AIRL_ITERS` (100). Each round:
+The default config is `prod` (`configs/prod.py`). Each round:
 
-- the agent collects `AGENT_COLLECT_STEPS` steps
-- the discriminator is trained for `DISC_EPOCHS` epochs
-- PPO is updated for `PPO_TIMESTEPS` steps
-- a checkpoint is saved as `checkpoints/ppo.pt`
+- the agent collects `airl.agent_collect_steps` steps
+- the discriminator is trained for `airl.disc_epochs` epochs
+- PPO is updated for `ppo.timesteps` steps
+- a checkpoint is saved under `checkpoints/<date>/ppo.pt`
 - scalars are written to `runs/<timestamp>/` (or `--logdir`)
 
 Watch training with TensorBoard:
@@ -86,13 +88,15 @@ Then open http://localhost:6006. Scalars are grouped as `disc/*` (loss, expert/a
 
 ```bash
 python compose.py
+python compose.py --config prod
 python compose.py --steps 256
 python compose.py --seed-midi midis/example.mid --output output/piece.mid
 ```
 
 | Argument | Description |
 |---|---|
-| `--checkpoint` | PPO weights (default: `checkpoints/ppo.pt`) |
+| `--config` | Config preset: `prod`, `debug`, or `trial` (default: `prod`) |
+| `--checkpoint` | PPO weights (default: latest under `checkpoints/`) |
 | `--steps` | Number of tokens to generate (default: 128) |
 | `--seed-midi` | MIDI used as context (at least 64 tokens) |
 | `--output` | Output path (otherwise `output/compose_<time>.mid`) |
@@ -103,7 +107,8 @@ python compose.py --seed-midi midis/example.mid --output output/piece.mid
 |---|---|
 | `train.py` | AIRL loop and TensorBoard logging |
 | `compose.py` | MIDI generation from a checkpoint |
-| `config.py` | Paths, tokenizer, AIRL and PPO hyperparameters |
+| `config.py` | Config loader and path helpers |
+| `configs/` | ml_collections presets (`prod`, `debug`, `trial`) |
 | `dataset.py` | MIDI → expert transitions |
 | `midi_io.py` | REMI encode / decode |
 | `env.py` | Gymnasium sliding-window environment |
@@ -112,14 +117,22 @@ python compose.py --seed-midi midis/example.mid --output output/piece.mid
 
 ## Settings
 
-Important values live in `config.py`:
+Configs use `ml_collections.ConfigDict` under `configs/`:
 
-- `MIDI_DIR`, `SEQ_LEN` (64), `COUNTRY_FILTER` — data
-- `N_AIRL_ITERS`, `DISC_LR`, `BATCH_SIZE` — AIRL
-- `PPO_LR`, `PPO_CLIP`, `PPO_ENT_COEF` — policy
-- `LOG_DIR` (`runs/`) — TensorBoard logs
+| Preset | Purpose |
+|---|---|
+| `prod` | Full training (default; matches original hyperparameters) |
+| `debug` | Fast smoke test (few iters, small batches) |
+| `trial` | Medium experiment run (smaller model, more exploration) |
 
-Country filter: `COUNTRY_FILTER = "England"` uses only `midis/England/`.
+Shared defaults live in `configs/base.py`. Key groups:
+
+- `paths` — `midi_dir`, `output_dir`, `checkpoint_dir`, `log_dir`
+- `data` — `seq_len` (64), `country_filter`, `tokenizer`
+- `airl` — `n_iters`, `disc_lr`, `batch_size`, ...
+- `ppo` — `lr`, `clip`, `ent_coef`, ...
+
+Country filter: set `data.country_filter = "England"` in a preset to use only `midis/England/`.
 
 ## Requirements
 
@@ -129,4 +142,5 @@ Country filter: `COUNTRY_FILTER = "England"` uses only `midis/England/`.
 - miditok
 - tqdm
 - tensorboard
+- ml_collections
 - stable-baselines3 (listed at install time; training uses the project's own PPO)

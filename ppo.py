@@ -1,8 +1,9 @@
-from dataclasses import dataclass
-
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
+
+from buffer import RolloutBuffer
+from datatypes import Rollout, Transition
 
 
 class ActorCritic(nn.Module):
@@ -53,86 +54,11 @@ class ActorCritic(nn.Module):
         return dist.log_prob(actions), values, dist.entropy()
 
 
-def compute_gae(rewards, values, dones, last_value, gamma: float, gae_lambda: float):
-    advantages = torch.zeros_like(rewards)
-    gae = 0.0
-    next_value = last_value
-    for t in reversed(range(len(rewards))):
-        mask = 1.0 - dones[t]
-        delta = rewards[t] + gamma * next_value * mask - values[t]
-        gae = delta + gamma * gae_lambda * mask * gae
-        advantages[t] = gae
-        next_value = values[t]
-    return advantages, advantages + values
-
-
 def _explained_variance(y_pred: torch.Tensor, y_true: torch.Tensor) -> float:
     y_var = torch.var(y_true)
     if y_var < 1e-8:
         return 0.0
     return float(1.0 - torch.var(y_true - y_pred) / y_var)
-
-
-@dataclass
-class Transition:
-    state: object
-    action: int
-    reward: float
-    done: bool
-    log_prob: float
-    value: float
-
-
-class RolloutBuffer:
-    def __init__(self, capacity: int, state_dim: int, gamma: float, gae_lambda: float):
-        self.capacity = capacity
-        self.gamma = gamma
-        self.gae_lambda = gae_lambda
-        self.ptr = 0
-
-        self.states = torch.zeros((capacity, state_dim), dtype=torch.float32)
-        self.actions = torch.zeros(capacity, dtype=torch.long)
-        self.rewards = torch.zeros(capacity, dtype=torch.float32)
-        self.dones = torch.zeros(capacity, dtype=torch.float32)
-        self.log_probs = torch.zeros(capacity, dtype=torch.float32)
-        self.values = torch.zeros(capacity, dtype=torch.float32)
-        self.advantages = None
-        self.returns = None
-
-    def reset(self) -> None:
-        self.ptr = 0
-        self.advantages = None
-        self.returns = None
-
-    def add(self, transition: Transition) -> None:
-        if self.ptr >= self.capacity:
-            raise IndexError("RolloutBuffer is full")
-        self.states[self.ptr] = torch.as_tensor(transition.state, dtype=torch.float32)
-        self.actions[self.ptr] = transition.action
-        self.rewards[self.ptr] = transition.reward
-        self.dones[self.ptr] = float(transition.done)
-        self.log_probs[self.ptr] = transition.log_prob
-        self.values[self.ptr] = transition.value
-        self.ptr += 1
-
-    def finalize(self, last_value: float) -> None:
-        rewards = self.rewards[: self.ptr]
-        values = self.values[: self.ptr]
-        dones = self.dones[: self.ptr]
-        self.advantages, self.returns = compute_gae(rewards, values, dones, last_value, self.gamma, self.gae_lambda)
-
-    def get(self) -> dict[str, torch.Tensor]:
-        n = self.ptr
-        return {
-            "states": self.states[:n],
-            "actions": self.actions[:n],
-            "log_probs": self.log_probs[:n],
-            "advantages": self.advantages,
-            "returns": self.returns,
-        }
-
-    def __len__(self) -> int:
-        return self.ptr
 
 
 class PPOAgent:
@@ -174,7 +100,7 @@ class PPOAgent:
         )
         self._last_state = None
 
-    def collect_rollout(self, n_steps: int) -> dict[str, torch.Tensor]:
+    def collect_rollout(self, n_steps: int) -> Rollout:
         self.buffer.reset()
 
         if self._last_state is None:
@@ -206,8 +132,8 @@ class PPOAgent:
         self.buffer.finalize(last_value)
         return self.buffer.get()
 
-    def update(self, rollout: dict[str, torch.Tensor]) -> dict[str, float]:
-        advantages = rollout["advantages"]
+    def update(self, rollout: Rollout) -> dict[str, float]:
+        advantages = rollout.advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         n = len(advantages)
@@ -225,13 +151,13 @@ class PPOAgent:
             order = torch.randperm(n)
             for start in range(0, n, self.minibatch_size):
                 idx = order[start : start + self.minibatch_size]
-                new_log_probs, values, entropy = self.policy.evaluate(rollout["states"][idx], rollout["actions"][idx])
-                log_ratio = new_log_probs - rollout["log_probs"][idx]
+                new_log_probs, values, entropy = self.policy.evaluate(rollout.states[idx], rollout.actions[idx])
+                log_ratio = new_log_probs - rollout.log_probs[idx]
                 ratio = torch.exp(log_ratio)
                 surr1 = ratio * advantages[idx]
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_coef, 1.0 + self.clip_coef) * advantages[idx]
                 policy_loss = -torch.min(surr1, surr2).mean()
-                value_loss = (values - rollout["returns"][idx]).pow(2).mean()
+                value_loss = (values - rollout.returns[idx]).pow(2).mean()
                 entropy_mean = entropy.mean()
                 loss = policy_loss + self.vf_coef * value_loss - self.ent_coef * entropy_mean
 
@@ -264,10 +190,7 @@ class PPOAgent:
             metrics = self.update(rollout)
             metrics["ppo/mean_reward"] = float(self.buffer.rewards[: self.buffer.ptr].mean())
             metrics["ppo/mean_return"] = float(self.buffer.returns.mean())
-            metrics["ppo/explained_variance"] = _explained_variance(
-                self.buffer.values[: self.buffer.ptr],
-                self.buffer.returns,
-            )
+            metrics["ppo/explained_variance"] = _explained_variance(self.buffer.values[: self.buffer.ptr], self.buffer.returns)
             for key, value in metrics.items():
                 totals[key] = totals.get(key, 0.0) + value
             n_updates += 1

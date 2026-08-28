@@ -1,49 +1,49 @@
+from datetime import date
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+from ml_collections import ConfigDict
 
-# Paths
-MIDI_DIR = ROOT / "midis"
-OUTPUT_DIR = ROOT / "output"
-CHECKPOINT_DIR = ROOT / "checkpoints"
-CHECKPOINT_PATH = CHECKPOINT_DIR / "ppo.pt"
-LOG_DIR = ROOT / "runs"
+from configs import load_config as _load_config
 
-# Data
-SEQ_LEN = 64
-MIN_SEQUENCE_LENGTH = SEQ_LEN + 1
-COUNTRY_FILTER = None  # e.g. "England" to filter by country folder
+DEFAULT_CONFIG_NAME = "trial"
+_active: ConfigDict | None = None
 
-TOKENIZER_PARAMS = {
-    "pitch_range": (21, 109),
-    "beat_res": {(0, 4): 8, (4, 12): 4},
-    "num_velocities": 16,
-    "use_chords": False,
-    "use_rests": False,
-    "use_tempos": False,
-    "use_time_signatures": False,
-    "use_programs": False,
-}
 
-# Environment
-ENV_MAX_STEPS = 100
+def load_config(name: str = DEFAULT_CONFIG_NAME) -> ConfigDict:
+    return _load_config(name)
 
-# AIRL
-N_AIRL_ITERS = 100
-AGENT_COLLECT_STEPS = 1024
-DISC_EPOCHS = 5
-DISC_LR = 3e-4
-BATCH_SIZE = 64
 
-# PPO
-PPO_HIDDEN = 128
-PPO_TIMESTEPS = 2048
-PPO_LR = 3e-4
-PPO_GAMMA = 0.99
-PPO_GAE_LAMBDA = 0.95
-PPO_CLIP = 0.2
-PPO_EPOCHS = 10
-PPO_MINIBATCH = 64
-PPO_ENT_COEF = 0.02
-PPO_VF_COEF = 0.5
-PPO_MAX_GRAD_NORM = 0.5
+def set_active_config(cfg: ConfigDict) -> None:
+    global _active
+    _active = cfg
+
+
+def get_active_config() -> ConfigDict:
+    if _active is None:
+        set_active_config(load_config())
+    return _active
+
+
+def min_sequence_length(cfg: ConfigDict | None = None) -> int:
+    cfg = cfg or get_active_config()
+    return cfg.data.seq_len + 1
+
+
+def today_checkpoint_dir(cfg: ConfigDict | None = None) -> Path:
+    cfg = cfg or get_active_config()
+    return Path(cfg.paths.checkpoint_dir) / date.today().isoformat()
+
+
+def today_checkpoint_path(cfg: ConfigDict | None = None) -> Path:
+    cfg = cfg or get_active_config()
+    return today_checkpoint_dir(cfg) / cfg.paths.checkpoint_name
+
+
+def latest_checkpoint_path(cfg: ConfigDict | None = None) -> Path:
+    cfg = cfg or get_active_config()
+    checkpoint_dir = Path(cfg.paths.checkpoint_dir)
+    checkpoint_name = cfg.paths.checkpoint_name
+    matches = sorted(checkpoint_dir.glob(f"*/{checkpoint_name}"))
+    if matches:
+        return matches[-1]
+    return today_checkpoint_path(cfg)

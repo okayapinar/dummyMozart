@@ -10,8 +10,8 @@
       "cwd": "${workspaceFolder}",
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "args": [
-        "--iters",
-        "10"
+        "--config",
+        "debug"
       ],
       "env": {
         "PYTHONUNBUFFERED": "1"

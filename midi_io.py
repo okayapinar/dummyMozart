@@ -2,20 +2,26 @@ from pathlib import Path
 
 from miditok import REMI, TokenizerConfig
 from miditok.classes import TokSequence
+from ml_collections import ConfigDict
 
 import config
 
 
-def get_tokenizer() -> REMI:
-    return REMI(TokenizerConfig(**config.TOKENIZER_PARAMS))
+def _tokenizer_params(cfg: ConfigDict) -> dict:
+    return cfg.data.tokenizer.to_dict()
 
 
-def vocab_size() -> int:
-    return len(get_tokenizer())
+def get_tokenizer(cfg: ConfigDict | None = None) -> REMI:
+    cfg = cfg or config.get_active_config()
+    return REMI(TokenizerConfig(**_tokenizer_params(cfg)))
 
 
-def load_token_sequence(path: Path | str) -> list[int]:
-    tokens = get_tokenizer()(Path(path))
+def vocab_size(cfg: ConfigDict | None = None) -> int:
+    return len(get_tokenizer(cfg))
+
+
+def load_token_sequence(path: Path | str, cfg: ConfigDict | None = None) -> list[int]:
+    tokens = get_tokenizer(cfg)(Path(path))
     if not isinstance(tokens, list):
         return tokens.ids
     if not tokens:
@@ -27,8 +33,8 @@ def load_token_sequence(path: Path | str) -> list[int]:
     return longest.ids
 
 
-def tokens_to_midi(token_ids: list[int], out_path: Path | str) -> None:
+def tokens_to_midi(token_ids: list[int], out_path: Path | str, cfg: ConfigDict | None = None) -> None:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    score = get_tokenizer().decode([TokSequence(ids=list(token_ids))])
+    score = get_tokenizer(cfg).decode([TokSequence(ids=list(token_ids))])
     score.dump_midi(out_path)

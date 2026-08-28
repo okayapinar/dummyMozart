@@ -66,6 +66,13 @@ def compute_gae(rewards, values, dones, last_value, gamma: float, gae_lambda: fl
     return advantages, advantages + values
 
 
+def _explained_variance(y_pred: torch.Tensor, y_true: torch.Tensor) -> float:
+    y_var = torch.var(y_true)
+    if y_var < 1e-8:
+        return 0.0
+    return float(1.0 - torch.var(y_true - y_pred) / y_var)
+
+
 @dataclass
 class Transition:
     state: object
@@ -199,37 +206,74 @@ class PPOAgent:
         self.buffer.finalize(last_value)
         return self.buffer.get()
 
-    def update(self, rollout: dict[str, torch.Tensor]) -> None:
+    def update(self, rollout: dict[str, torch.Tensor]) -> dict[str, float]:
         advantages = rollout["advantages"]
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         n = len(advantages)
+        totals = {
+            "ppo/policy_loss": 0.0,
+            "ppo/value_loss": 0.0,
+            "ppo/entropy": 0.0,
+            "ppo/clipfrac": 0.0,
+            "ppo/approx_kl": 0.0,
+            "ppo/grad_norm": 0.0,
+        }
+        n_minibatches = 0
+
         for _ in range(self.n_epochs):
             order = torch.randperm(n)
             for start in range(0, n, self.minibatch_size):
                 idx = order[start : start + self.minibatch_size]
                 new_log_probs, values, entropy = self.policy.evaluate(rollout["states"][idx], rollout["actions"][idx])
-                ratio = torch.exp(new_log_probs - rollout["log_probs"][idx])
+                log_ratio = new_log_probs - rollout["log_probs"][idx]
+                ratio = torch.exp(log_ratio)
                 surr1 = ratio * advantages[idx]
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_coef, 1.0 + self.clip_coef) * advantages[idx]
                 policy_loss = -torch.min(surr1, surr2).mean()
                 value_loss = (values - rollout["returns"][idx]).pow(2).mean()
-                loss = policy_loss + self.vf_coef * value_loss - self.ent_coef * entropy.mean()
+                entropy_mean = entropy.mean()
+                loss = policy_loss + self.vf_coef * value_loss - self.ent_coef * entropy_mean
 
                 self.optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                grad_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.optimizer.step()
+
+                totals["ppo/policy_loss"] += policy_loss.item()
+                totals["ppo/value_loss"] += value_loss.item()
+                totals["ppo/entropy"] += entropy_mean.item()
+                totals["ppo/clipfrac"] += ((ratio - 1.0).abs() > self.clip_coef).float().mean().item()
+                totals["ppo/approx_kl"] += ((ratio - 1.0) - log_ratio).mean().item()
+                totals["ppo/grad_norm"] += float(grad_norm)
+                n_minibatches += 1
+
+        return {key: value / max(n_minibatches, 1) for key, value in totals.items()}
 
     def predict(self, state, deterministic: bool = False) -> tuple[int, None]:
         return self.policy.predict(state, deterministic=deterministic)
 
-    def learn(self, total_timesteps: int) -> None:
+    def learn(self, total_timesteps: int) -> dict[str, float]:
         steps_done = 0
+        totals: dict[str, float] = {}
+        n_updates = 0
+
         while steps_done < total_timesteps:
             n_steps = min(self.n_steps, total_timesteps - steps_done)
-            self.update(self.collect_rollout(n_steps))
+            rollout = self.collect_rollout(n_steps)
+            metrics = self.update(rollout)
+            metrics["ppo/mean_reward"] = float(self.buffer.rewards[: self.buffer.ptr].mean())
+            metrics["ppo/mean_return"] = float(self.buffer.returns.mean())
+            metrics["ppo/explained_variance"] = _explained_variance(
+                self.buffer.values[: self.buffer.ptr],
+                self.buffer.returns,
+            )
+            for key, value in metrics.items():
+                totals[key] = totals.get(key, 0.0) + value
+            n_updates += 1
             steps_done += n_steps
+
+        return {key: value / max(n_updates, 1) for key, value in totals.items()}
 
     def save(self, path: str) -> None:
         torch.save(self.policy.state_dict(), path)

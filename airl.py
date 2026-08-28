@@ -127,6 +127,14 @@ def train_discriminator(discriminator, optimizer, expert_data, agent_data, polic
     exp_batch = min(batch_size, len(exp_s))
     agent_batch = min(batch_size, len(agent_s))
 
+    totals = {
+        "disc/loss": 0.0,
+        "disc/expert_acc": 0.0,
+        "disc/agent_acc": 0.0,
+        "disc/expert_reward": 0.0,
+        "disc/agent_reward": 0.0,
+    }
+
     for _ in range(epochs):
         # Her epoch'ta rastgele uzman ve ajan batch'i
         exp_idx = np.random.choice(len(exp_s), exp_batch, replace=len(exp_s) < exp_batch)
@@ -148,6 +156,15 @@ def train_discriminator(discriminator, optimizer, expert_data, agent_data, polic
         # Uzman "gercek", ajan "sahte"
         loss = criterion(logits_exp, torch.ones_like(logits_exp)) + criterion(logits_gen, torch.zeros_like(logits_gen))
 
+        with torch.no_grad():
+            totals["disc/loss"] += loss.item()
+            totals["disc/expert_acc"] += (torch.sigmoid(logits_exp) > 0.5).float().mean().item()
+            totals["disc/agent_acc"] += (torch.sigmoid(logits_gen) < 0.5).float().mean().item()
+            totals["disc/expert_reward"] += discriminator.f_theta(s_exp, a_exp, s_next_exp).mean().item()
+            totals["disc/agent_reward"] += discriminator.f_theta(s_gen, a_gen, s_next_gen).mean().item()
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+    return {key: value / epochs for key, value in totals.items()}

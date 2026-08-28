@@ -7,6 +7,7 @@ MIDI_DIR = ROOT / "midis"
 OUTPUT_DIR = ROOT / "output"
 CHECKPOINT_DIR = ROOT / "checkpoints"
 CHECKPOINT_PATH = CHECKPOINT_DIR / "ppo.pt"
+LOG_DIR = ROOT / "runs"
 
 # Data
 SEQ_LEN = 64

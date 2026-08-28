@@ -63,6 +63,7 @@ Put expert MIDI files in `midis/` (subfolders are scanned). Files must be long e
 ```bash
 python train.py
 python train.py --iters 50
+python train.py --logdir runs/experiment1
 ```
 
 The default iteration count is `config.N_AIRL_ITERS` (100). Each round:
@@ -71,6 +72,15 @@ The default iteration count is `config.N_AIRL_ITERS` (100). Each round:
 - the discriminator is trained for `DISC_EPOCHS` epochs
 - PPO is updated for `PPO_TIMESTEPS` steps
 - a checkpoint is saved as `checkpoints/ppo.pt`
+- scalars are written to `runs/<timestamp>/` (or `--logdir`)
+
+Watch training with TensorBoard:
+
+```bash
+tensorboard --logdir runs
+```
+
+Then open http://localhost:6006. Scalars are grouped as `disc/*` (loss, expert/agent accuracy and reward) and `ppo/*` (policy/value loss, entropy, clip fraction, KL, reward, explained variance).
 
 ## Composing
 
@@ -91,7 +101,7 @@ python compose.py --seed-midi midis/example.mid --output output/piece.mid
 
 | File | Role |
 |---|---|
-| `train.py` | AIRL loop |
+| `train.py` | AIRL loop and TensorBoard logging |
 | `compose.py` | MIDI generation from a checkpoint |
 | `config.py` | Paths, tokenizer, AIRL and PPO hyperparameters |
 | `dataset.py` | MIDI → expert transitions |
@@ -107,6 +117,7 @@ Important values live in `config.py`:
 - `MIDI_DIR`, `SEQ_LEN` (64), `COUNTRY_FILTER` — data
 - `N_AIRL_ITERS`, `DISC_LR`, `BATCH_SIZE` — AIRL
 - `PPO_LR`, `PPO_CLIP`, `PPO_ENT_COEF` — policy
+- `LOG_DIR` (`runs/`) — TensorBoard logs
 
 Country filter: `COUNTRY_FILTER = "England"` uses only `midis/England/`.
 
@@ -117,4 +128,5 @@ Country filter: `COUNTRY_FILTER = "England"` uses only `midis/England/`.
 - numpy
 - miditok
 - tqdm
+- tensorboard
 - stable-baselines3 (listed at install time; training uses the project's own PPO)

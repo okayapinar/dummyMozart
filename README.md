@@ -1,52 +1,52 @@
 # dummyMozart
 
-MIDI dosyalarından uzman davranışını öğrenip yeni müzik üreten bir AIRL + PPO projesi.
+An AIRL + PPO project that learns expert behavior from MIDI files and generates new music.
 
-El ile ödül tasarlamak yerine, `midis/` altındaki parçalardan geçişler çıkarılır. Ayrımcı (AIRL) uzman ile ajanı ayırt eder; PPO bu ödülle bir sonraki token’ı seçmeyi öğrenir. Eğitilen politika yeni bir MIDI dosyası üretir.
+Instead of designing a reward by hand, transitions are extracted from pieces under `midis/`. The discriminator (AIRL) tells expert from agent; PPO uses that reward to learn the next token. The trained policy writes a new MIDI file.
 
-## Nasıl çalışır
+## How it works
 
-1. MIDI dosyaları REMI tokenizer ile token dizisine çevrilir.
-2. Her pencere `(durum, aksiyon, sonraki durum)` uzman geçişi olur: durum son 64 token, aksiyon bir sonraki token.
-3. Ortam (`MIDIMusicEnv`) bir kaydırma penceresidir; aksiyon pencerenin sonuna eklenir.
-4. Her AIRL turunda ajan yörüngeleri toplanır, ayrımcı eğitilir, PPO `f_θ` ödülüyle güncellenir.
-5. `compose.py` checkpoint’ten token üretir ve MIDI’ye çevirir.
-
-```
-midis/*.mid  →  uzman geçişleri  →  AIRL (ayrımcı + PPO)  →  checkpoints/ppo.pt  →  output/*.mid
-```
-
-## AIRL sözde kod
-
-Eğitim `airl.py` içindeki bu döngüyü izler. Ayrımcı uzmanı ajan’dan ayırt etmeyi öğrenir; PPO ise ayrımcının ürettiği ödülle politikayı günceller.
+1. MIDI files are converted to token sequences with a REMI tokenizer.
+2. Each window is an expert transition `(state, action, next state)`: the state is the last 64 tokens, the action is the next token.
+3. The environment (`MIDIMusicEnv`) is a sliding window; the action is appended to the end of the window.
+4. Each AIRL round collects agent trajectories, trains the discriminator, and updates PPO with the `f_θ` reward.
+5. `compose.py` generates tokens from a checkpoint and converts them to MIDI.
 
 ```
-Uzman geçişlerini yükle: (s, a, s') ~ τ_E
-Ayrımcı D_θ = {g, h} ve politika π'yi başlat
+midis/*.mid  →  expert transitions  →  AIRL (discriminator + PPO)  →  checkpoints/ppo.pt  →  output/*.mid
+```
 
-her AIRL iterasyonunda:
-    Ajan geçişlerini topla: (s, a, s') ~ π
+## AIRL pseudocode
 
-    her ayrımcı epoch'unda:
-        Uzman ve ajan batch'i örnekle
-        Her iki batch için log π(a|s) hesapla
+Training follows this loop in `airl.py`. The discriminator learns to tell expert from agent; PPO updates the policy with the discriminator's reward.
+
+```
+Load expert transitions: (s, a, s') ~ τ_E
+Initialize discriminator D_θ = {g, h} and policy π
+
+for each AIRL iteration:
+    Collect agent transitions: (s, a, s') ~ π
+
+    for each discriminator epoch:
+        Sample an expert batch and an agent batch
+        Compute log π(a|s) for both batches
         f_θ(s, a, s') = g(s, a) + γ · h(s') − h(s)
         logits = f_θ − log π
-        Loss = BCE(uzman, 1) + BCE(ajan, 0)
-        Ayrımcıyı güncelle
+        Loss = BCE(expert, 1) + BCE(agent, 0)
+        Update the discriminator
 
-    Ödül: r(s, a, s') = f_θ(s, a, s')
-    Politikayı PPO ile bu ödülü kullanarak güncelle
+    Reward: r(s, a, s') = f_θ(s, a, s')
+    Update the policy with PPO using this reward
 ```
 
-- `g(s, a)` öğrenilen durum-aksiyon ödülü, `h(s)` potansiyel (shaping) fonksiyonudur.
-- `f_θ` shaped ödüldür; `h` terimleri politika optimumunu değiştirmeden öğrenmeyi kolaylaştırır.
-- Logits’ten `log π` çıkarılması, ayrımcının “bu geçiş uzman mı?” sorusunu politikadan bağımsız sormasını sağlar.
-- Uzman 1, ajan 0 etiketlenir (BCE). PPO ortam ödülü olarak `f_θ` kullanır.
+- `g(s, a)` is the learned state-action reward; `h(s)` is the potential (shaping) function.
+- `f_θ` is the shaped reward; the `h` terms make learning easier without changing the policy optimum.
+- Subtracting `log π` from the logits lets the discriminator ask “is this transition expert?” independently of the policy.
+- Expert is labeled 1, agent 0 (BCE). PPO uses `f_θ` as the environment reward.
 
-## Kurulum
+## Setup
 
-Python 3.10+ önerilir.
+Python 3.10+ is recommended.
 
 ```bash
 python -m venv .venv
@@ -56,65 +56,65 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Uzman MIDI dosyalarını `midis/` klasörüne koyun (alt klasörler taranır). En az `SEQ_LEN + 1` token üretecek kadar uzun dosyalar gerekir.
+Put expert MIDI files in `midis/` (subfolders are scanned). Files must be long enough to produce at least `SEQ_LEN + 1` tokens.
 
-## Eğitim
+## Training
 
 ```bash
 python train.py
 python train.py --iters 50
 ```
 
-Varsayılan iterasyon sayısı `config.N_AIRL_ITERS` (100). Her turda:
+The default iteration count is `config.N_AIRL_ITERS` (100). Each round:
 
-- ajan `AGENT_COLLECT_STEPS` adım toplar
-- ayrımcı `DISC_EPOCHS` epoch eğitilir
-- PPO `PPO_TIMESTEPS` adım güncellenir
-- checkpoint `checkpoints/ppo.pt` olarak kaydedilir
+- the agent collects `AGENT_COLLECT_STEPS` steps
+- the discriminator is trained for `DISC_EPOCHS` epochs
+- PPO is updated for `PPO_TIMESTEPS` steps
+- a checkpoint is saved as `checkpoints/ppo.pt`
 
-## Beste üretme
+## Composing
 
 ```bash
 python compose.py
 python compose.py --steps 256
-python compose.py --seed-midi midis/ornek.mid --output output/parca.mid
+python compose.py --seed-midi midis/example.mid --output output/piece.mid
 ```
 
-| Argüman | Açıklama |
+| Argument | Description |
 |---|---|
-| `--checkpoint` | PPO ağırlıkları (varsayılan: `checkpoints/ppo.pt`) |
-| `--steps` | Üretilecek token sayısı (varsayılan: 128) |
-| `--seed-midi` | Bağlam için kullanılacak MIDI (en az 64 token) |
-| `--output` | Çıktı yolu (yoksa `output/compose_<zaman>.mid`) |
+| `--checkpoint` | PPO weights (default: `checkpoints/ppo.pt`) |
+| `--steps` | Number of tokens to generate (default: 128) |
+| `--seed-midi` | MIDI used as context (at least 64 tokens) |
+| `--output` | Output path (otherwise `output/compose_<time>.mid`) |
 
-## Dosyalar
+## Files
 
-| Dosya | Görev |
+| File | Role |
 |---|---|
-| `train.py` | AIRL döngüsü |
-| `compose.py` | Checkpoint’ten MIDI üretimi |
-| `config.py` | Yollar, tokenizer, AIRL ve PPO hiperparametreleri |
-| `dataset.py` | MIDI → uzman geçişleri |
+| `train.py` | AIRL loop |
+| `compose.py` | MIDI generation from a checkpoint |
+| `config.py` | Paths, tokenizer, AIRL and PPO hyperparameters |
+| `dataset.py` | MIDI → expert transitions |
 | `midi_io.py` | REMI encode / decode |
-| `env.py` | Gymnasium kaydırma-pencere ortamı |
-| `airl.py` | Ayrımcı, ödül sarmalayıcı, yörünge toplama |
+| `env.py` | Gymnasium sliding-window environment |
+| `airl.py` | Discriminator, reward wrapper, trajectory collection |
 | `ppo.py` | Actor-critic, GAE, clipped PPO |
 
-## Ayarlar
+## Settings
 
-Önemli değerler `config.py` içindedir:
+Important values live in `config.py`:
 
-- `MIDI_DIR`, `SEQ_LEN` (64), `COUNTRY_FILTER` — veri
+- `MIDI_DIR`, `SEQ_LEN` (64), `COUNTRY_FILTER` — data
 - `N_AIRL_ITERS`, `DISC_LR`, `BATCH_SIZE` — AIRL
-- `PPO_LR`, `PPO_CLIP`, `PPO_ENT_COEF` — politika
+- `PPO_LR`, `PPO_CLIP`, `PPO_ENT_COEF` — policy
 
-Ülkeye göre filtre: `COUNTRY_FILTER = "England"` yalnızca `midis/England/` altını kullanır.
+Country filter: `COUNTRY_FILTER = "England"` uses only `midis/England/`.
 
-## Gereksinimler
+## Requirements
 
 - gymnasium
 - torch
 - numpy
 - miditok
 - tqdm
-- stable-baselines3 (kurulumda listelenir; eğitim kendi PPO uygulamasını kullanır)
+- stable-baselines3 (listed at install time; training uses the project's own PPO)

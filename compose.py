@@ -6,9 +6,9 @@ from pathlib import Path
 import numpy as np
 
 import config
-from dataset import load_or_build_expert
+from dataset import build_expert_transitions
 from env import MIDIMusicEnv
-from midi_io import load_pitch_sequence, sequence_to_midi
+from midi_io import load_token_sequence, tokens_to_midi, vocab_size
 from ppo import PPOAgent
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -23,7 +23,7 @@ def parse_args():
         default=str(config.CHECKPOINT_PATH),
         help="Path to PPO checkpoint (.pt).",
     )
-    parser.add_argument("--steps", type=int, default=128, help="Number of notes to generate.")
+    parser.add_argument("--steps", type=int, default=128, help="Number of tokens to generate.")
     parser.add_argument(
         "--seed-midi",
         type=str,
@@ -40,18 +40,18 @@ def parse_args():
 
 
 def _seed_state_from_midi(seed_midi: Path) -> np.ndarray:
-    pitches = load_pitch_sequence(seed_midi)
-    if len(pitches) < config.SEQ_LEN:
-        raise ValueError(f"Seed MIDI too short (need at least {config.SEQ_LEN} notes).")
-    return np.array(pitches[: config.SEQ_LEN], dtype=np.float32)
+    token_ids = load_token_sequence(seed_midi)
+    if len(token_ids) < config.SEQ_LEN:
+        raise ValueError(f"Seed MIDI too short (need at least {config.SEQ_LEN} tokens).")
+    return np.array(token_ids[: config.SEQ_LEN], dtype=np.float32)
 
 
 def compose(checkpoint: Path, steps: int, seed_state: np.ndarray | None = None) -> list[int]:
-    expert_states, _, _ = load_or_build_expert()
+    expert_states, _, _ = build_expert_transitions()
     env = MIDIMusicEnv(
         expert_states=expert_states,
         midi_sequence_length=config.SEQ_LEN,
-        vocab_size=config.VOCAB_SIZE,
+        vocab_size=vocab_size(),
         max_steps=steps,
     )
 
@@ -64,17 +64,17 @@ def compose(checkpoint: Path, steps: int, seed_state: np.ndarray | None = None) 
         env.current_step = 0
         state = env.state
 
-    pitches = list(state.astype(int))
+    token_ids = list(state.astype(int))
 
     for _ in range(steps):
         action, _ = model.predict(state, deterministic=True)
         action = int(action)
         state, _, terminated, truncated, _ = env.step(action)
-        pitches.append(action)
+        token_ids.append(action)
         if terminated or truncated:
             break
 
-    return pitches
+    return token_ids
 
 
 def main():
@@ -87,7 +87,7 @@ def main():
     if args.seed_midi:
         seed_state = _seed_state_from_midi(Path(args.seed_midi))
 
-    pitches = compose(checkpoint, args.steps, seed_state)
+    token_ids = compose(checkpoint, args.steps, seed_state)
 
     if args.output:
         output_path = Path(args.output)
@@ -96,8 +96,8 @@ def main():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = config.OUTPUT_DIR / f"compose_{timestamp}.mid"
 
-    sequence_to_midi(pitches, output_path)
-    logger.info("Saved composition (%d notes) to %s", len(pitches), output_path)
+    tokens_to_midi(token_ids, output_path)
+    logger.info("Saved composition (%d tokens) to %s", len(token_ids), output_path)
 
 
 if __name__ == "__main__":

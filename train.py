@@ -11,8 +11,9 @@ from airl import (
     collect_agent_trajectories,
     train_discriminator,
 )
-from dataset import load_or_build_expert
+from dataset import build_expert_transitions
 from env import MIDIMusicEnv
+from midi_io import vocab_size
 from ppo import PPOAgent
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -21,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train AIRL music composer from MIDI files.")
-    parser.add_argument("--rebuild-cache", action="store_true", help="Rebuild expert transition cache.")
     parser.add_argument("--iters", type=int, default=config.N_AIRL_ITERS)
     return parser.parse_args()
 
@@ -30,33 +30,20 @@ def main():
     args = parse_args()
     config.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
-    expert_states, expert_actions, expert_next_states = load_or_build_expert(rebuild=args.rebuild_cache)
+    expert_states, expert_actions, expert_next_states = build_expert_transitions()
     expert_data = (expert_states, expert_actions, expert_next_states)
 
     base_env = MIDIMusicEnv(
         expert_states=expert_states,
         midi_sequence_length=config.SEQ_LEN,
-        vocab_size=config.VOCAB_SIZE,
+        vocab_size=vocab_size(),
         max_steps=config.ENV_MAX_STEPS,
     )
 
     discriminator = AIRLDiscriminator(state_dim=config.SEQ_LEN, action_dim=1)
     disc_optimizer = optim.Adam(discriminator.parameters(), lr=config.DISC_LR)
     airl_env = AIRLRewardWrapper(base_env, discriminator)
-    generator = PPOAgent(
-        airl_env,
-        hidden=config.PPO_HIDDEN,
-        lr=config.PPO_LR,
-        gamma=config.PPO_GAMMA,
-        gae_lambda=config.PPO_GAE_LAMBDA,
-        clip_coef=config.PPO_CLIP,
-        ent_coef=config.PPO_ENT_COEF,
-        vf_coef=config.PPO_VF_COEF,
-        n_epochs=config.PPO_EPOCHS,
-        minibatch_size=config.PPO_MINIBATCH,
-        max_grad_norm=config.PPO_MAX_GRAD_NORM,
-        n_steps=config.PPO_TIMESTEPS,
-    )
+    generator = PPOAgent(airl_env)
 
     logger.info("Starting AIRL training with %d expert transitions.", len(expert_states))
 
